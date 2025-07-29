@@ -1,0 +1,73 @@
+# Default configuration for ARC Prize 2025
+
+# Data settings
+data:
+  data_dir: "data"
+  training_challenges_file: "arc-agi_training-challenges.json"
+  training_solutions_file: "arc-agi_training-solutions.json"
+  evaluation_challenges_file: "arc-agi_evaluation-challenges.json"
+  evaluation_solutions_file: "arc-agi_evaluation-solutions.json"
+  test_challenges_file: "arc-agi_test-challenges.json"
+  sample_submission_file: "sample_submission.json"
+
+# Model settings
+model:
+  type: "pattern_matching"  # baseline, pattern_matching
+  config:
+    max_iterations: 1000
+    confidence_threshold: 0.8
+    supported_transformations:
+      - identity
+      - rotation_90
+      - rotation_180
+      - rotation_270
+      - flip_horizontal
+      - flip_vertical
+      - translation
+      - scaling
+      - color_mapping
+      - pattern_replication
+
+# Evaluation settings
+evaluation:
+  cross_validation: true
+  test_size: 0.2
+  random_state: 42
+  metrics:
+    - accuracy
+    - precision
+    - recall
+
+# Training settings
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  epochs: 100
+  early_stopping: true
+  patience: 10
+
+# Submission settings
+submission:
+  output_file: "submission.json"
+  validate_format: true
+  backup_predictions: true
+  max_attempts_per_task: 2
+
+# Logging settings
+logging:
+  level: "INFO"
+  save_logs: true
+  log_dir: "logs"
+
+# Hardware settings
+hardware:
+  use_gpu: true
+  num_workers: 4
+  memory_limit: "8GB"
+
+# Competition settings
+competition:
+  max_grid_size: 30
+  min_grid_size: 1
+  max_colors: 10  # 0-9 inclusive
+  time_limit_hours: 12 
