@@ -1,0 +1,317 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: arc-ai
+  labels:
+    name: arc-ai
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arc-ai-app
+  namespace: arc-ai
+  labels:
+    app: arc-ai
+    component: ai-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: arc-ai
+      component: ai-app
+  template:
+    metadata:
+      labels:
+        app: arc-ai
+        component: ai-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: arc-ai
+        image: arc-ai:latest
+        ports:
+        - containerPort: 8000
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: MODEL_TYPE
+          value: "breakthrough"
+        - name: ENABLE_MONITORING
+          value: "true"
+        - name: REDIS_HOST
+          value: "arc-redis"
+        - name: POSTGRES_HOST
+          value: "arc-postgres"
+        - name: POSTGRES_DB
+          value: "arc_ai"
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: arc-secrets
+              key: postgres-user
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: arc-secrets
+              key: postgres-password
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app/data
+        - name: models-volume
+          mountPath: /app/models
+        - name: logs-volume
+          mountPath: /app/logs
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: arc-data-pvc
+      - name: models-volume
+        persistentVolumeClaim:
+          claimName: arc-models-pvc
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: arc-logs-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: arc-ai-service
+  namespace: arc-ai
+  labels:
+    app: arc-ai
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+    name: metrics
+  selector:
+    app: arc-ai
+    component: ai-app
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: arc-ai-hpa
+  namespace: arc-ai
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: arc-ai-app
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arc-data-pvc
+  namespace: arc-ai
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arc-models-pvc
+  namespace: arc-ai
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: arc-logs-pvc
+  namespace: arc-ai
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: arc-secrets
+  namespace: arc-ai
+type: Opaque
+data:
+  postgres-user: YXJjX3VzZXI=  # arc_user
+  postgres-password: c2VjdXJlX3Bhc3N3b3JkXzEyMw==  # secure_password_123
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: arc-ai-ingress
+  namespace: arc-ai
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+  - hosts:
+    - arc-ai.yourdomain.com
+    secretName: arc-ai-tls
+  rules:
+  - host: arc-ai.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: arc-ai-service
+            port:
+              number: 80
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: arc-ai-monitor
+  namespace: arc-ai
+spec:
+  selector:
+    matchLabels:
+      app: arc-ai
+      component: ai-app
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: arc-ai-alerts
+  namespace: arc-ai
+spec:
+  groups:
+  - name: arc-ai
+    rules:
+    - alert: HighErrorRate
+      expr: rate(arc_errors_total[5m]) > 0.1
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High error rate detected"
+        description: "Error rate is {{ $value }} errors per second"
+    
+    - alert: LowAccuracy
+      expr: arc_accuracy_current < 0.20
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Model accuracy below 20%"
+        description: "Current accuracy is {{ $value }}"
+    
+    - alert: HighMemoryUsage
+      expr: (container_memory_usage_bytes{container="arc-ai"} / container_spec_memory_limit_bytes{container="arc-ai"}) > 0.8
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High memory usage"
+        description: "Memory usage is {{ $value | humanizePercentage }}"
+    
+    - alert: HighCPUUsage
+      expr: (rate(container_cpu_usage_seconds_total{container="arc-ai"}[5m]) * 100) > 80
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage"
+        description: "CPU usage is {{ $value }}%"
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: arc-ai-optimization
+  namespace: arc-ai
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: optimizer
+            image: arc-ai:latest
+            command: ["python"]
+            args: ["-c", "
+from src.optimization.performance_optimizer import get_performance_optimizer
+optimizer = get_performance_optimizer()
+results = optimizer.optimize_for_30_percent({})
+print('Optimization completed:', results)
+"]
+            env:
+            - name: ENVIRONMENT
+              value: "production"
+          restartPolicy: OnFailure 
